@@ -1,13 +1,12 @@
+import logging
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
-# Zmieniony import dla wyjątków SQLAlchemy
 from sqlalchemy.exc import SQLAlchemyError
 from flask_cors import CORS
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
-
 
 app = Flask(__name__)
 CORS(app)
@@ -18,7 +17,15 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 login_manager = LoginManager(app)
-login_manager.login_view = 'login'
+
+
+logging.basicConfig(level=logging.DEBUG)
+
+
+@app.errorhandler(500)
+def handle_500_error(e):
+    app.logger.error(f'Błąd serwera: {e}')
+    return jsonify({'error': 'Internal server error'}), 500
 
 
 class User(db.Model, UserMixin):
@@ -41,6 +48,7 @@ class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String, nullable=False)
     price = db.Column(db.Float, nullable=False)
+    cart_items = db.relationship('CartItem', backref='product', lazy=True)
 
     def __repr__(self):
         return f'<Product {self.name} x {self.price}>'
@@ -65,12 +73,21 @@ def load_user(user_id):
         return None
 
 
+@login_manager.unauthorized_handler
+def unauthorized():
+    """Zwraca 403 dla niezalogowanych użytkowników próbujących uzyskać dostęp do chronionych zasobów."""
+    return jsonify({'error': 'You must be logged in to access this resource.'}), 403
+
+
 @app.route('/register', methods=['POST'])
 def register():
     try:
         data = request.get_json()
         username = data.get('username')
         password = data.get('password')
+
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
 
         if User.query.filter_by(username=username).first():
             return jsonify({'error': 'Username already exists'}), 400
@@ -117,7 +134,8 @@ def logout():
 @login_required
 def get_current_user():
     try:
-        return jsonify({'username': current_user.username}), 200
+        return jsonify({'username': current_user.username
+                        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
@@ -170,13 +188,18 @@ def get_product(product_id):
 def get_cart_items():
     try:
         cart_items = CartItem.query.filter_by(user_id=current_user.id).all()
-        cart_items_data = [{
-            'id': item.id,
-            'product_id': item.product_id,
-            'quantity': item.quantity,
-            'name': item.product.name,
-            'price': item.product.price
-        } for item in cart_items]
+        cart_items_data = []
+        for item in cart_items:
+            product = Product.query.get(item.product_id)
+            if product:
+                cart_items_data.append({
+                    'id': item.id,
+                    'product_id': item.product_id,
+                    'quantity': item.quantity,
+                    'name': product.name,
+                    'price': product.price
+                })
+
         return jsonify(cart_items_data)
     except SQLAlchemyError as e:
         return jsonify({'error': str(e)}), 500
@@ -190,35 +213,22 @@ def add_to_cart(product_id):
     try:
         data = request.get_json()
         quantity = data.get('quantity', 1)
-
         product = Product.query.get(product_id)
+
         if not product:
             return jsonify({'error': 'Product not found'}), 404
 
-        cart_item = CartItem.query.filter_by(
-            user_id=current_user.id, product_id=product_id).first()
-
-        if cart_item:
-            cart_item.quantity += quantity
-        else:
-            cart_item = CartItem(user_id=current_user.id,
-                                 product_id=product_id, quantity=quantity)
-
+        cart_item = CartItem(user_id=current_user.id,
+                             product_id=product_id, quantity=quantity)
         db.session.add(cart_item)
         db.session.commit()
 
-        return jsonify({'message': 'Product added to cart',
-                        'cartItem': {'product_id': cart_item.product_id,
-                                     'quantity': cart_item.quantity
-                                     }}), 201
-    except SQLAlchemyError as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'message': 'Product added to cart', 'cartItem': {'product_id': cart_item.product_id, 'quantity': cart_item.quantity}}), 201
     except Exception as e:
-        return jsonify({'error': 'Unexpected error occurred'}), 500
+        return jsonify({'error': str(e)}), 400
 
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(host='0.0.0.0', port=5000, debug=True)
+        app.run(host='0.0.0.0', port=5000, debug=True)
