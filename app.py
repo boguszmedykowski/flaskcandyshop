@@ -1,10 +1,13 @@
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
+# Zmieniony import dla wyjątków SQLAlchemy
+from sqlalchemy.exc import SQLAlchemyError
 from flask_cors import CORS
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
+
 
 app = Flask(__name__)
 CORS(app)
@@ -22,7 +25,6 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
-    cart_items = db.relationship('CartItem', backref='user', lazy=True)
 
     def __init__(self, username, password):
         self.username = username
@@ -50,7 +52,6 @@ class CartItem(db.Model):
     product_id = db.Column(db.Integer, db.ForeignKey(
         'product.id'), nullable=False)
     quantity = db.Column(db.Integer, default=1, nullable=False)
-    product = db.relationship('Product', backref='cart_items', lazy=True)
 
     def __repr__(self):
         return f'<CartItem User: {self.user_id} Product: {self.product_id} Quantity: {self.quantity}>'
@@ -58,37 +59,51 @@ class CartItem(db.Model):
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    try:
+        return User.query.get(int(user_id))
+    except Exception as e:
+        return None
 
 
 @app.route('/register', methods=['POST'])
 def register():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
 
-    if User.query.filter_by(username=username).first():
-        return jsonify({'error': 'Username already exists'}), 400
+        if User.query.filter_by(username=username).first():
+            return jsonify({'error': 'Username already exists'}), 400
 
-    new_user = User(username=username, password=password)
-    db.session.add(new_user)
-    db.session.commit()
+        new_user = User(username=username, password=password)
+        db.session.add(new_user)
+        db.session.commit()
 
-    return jsonify({'message': 'User registered successfully'}), 201
+        return jsonify({'message': 'User registered successfully'}), 201
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
 
-    user = User.query.filter_by(username=username).first()
-    if user and user.check_password(password):
-        login_user(user)
-        return jsonify({'message': 'Logged in successfully'}), 200
-    else:
-        return jsonify({'error': 'Invalid credentials'}), 401
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            login_user(user)
+            return jsonify({'message': 'Logged in successfully'}), 200
+        else:
+            return jsonify({'error': 'Invalid credentials'}), 401
+    except SQLAlchemyError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 @app.route('/logout', methods=['POST'])
@@ -101,13 +116,21 @@ def logout():
 @app.route('/current_user', methods=['GET'])
 @login_required
 def get_current_user():
-    return jsonify({'username': current_user.username}), 200
+    try:
+        return jsonify({'username': current_user.username}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 
 @app.route('/products', methods=['GET'])
 def list_products():
-    products = Product.query.all()
-    return jsonify([{'id': product.id, 'name': product.name, 'price': product.price} for product in products])
+    try:
+        products = Product.query.all()
+        return jsonify([{'id': product.id, 'name': product.name, 'price': product.price} for product in products])
+    except SQLAlchemyError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 @app.route('/add_product', methods=['POST'])
@@ -117,31 +140,48 @@ def add_product():
         new_product = Product(name=data['name'], price=data['price'])
         db.session.add(new_product)
         db.session.commit()
-        return jsonify({'message': 'Product added successfully', 'product': {'id': new_product.id, 'name': new_product.name, 'price': new_product.price}}), 201
+        return jsonify({'message': 'Product added successfully',
+                        'product': {'id': new_product.id,
+                                    'name': new_product.name,
+                                    'price': new_product.price
+                                    }}), 201
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 @app.route('/product/<int:product_id>', methods=['GET'])
 def get_product(product_id):
-    product = Product.query.get(product_id)
-    if not product:
-        return jsonify({'error': 'Product not found'}), 404
-    return jsonify({'id': product.id, 'name': product.name, 'price': product.price})
+    try:
+        product = Product.query.get(product_id)
+        if not product:
+            return jsonify({'error': 'Product not found'}), 404
+        return jsonify({'id': product.id, 'name': product.name, 'price': product.price})
+    except SQLAlchemyError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 @app.route('/cart', methods=['GET'])
 @login_required
 def get_cart_items():
-    cart_items = CartItem.query.filter_by(user_id=current_user.id).all()
-    cart_items_data = [{
-        'id': item.id,
-        'product_id': item.product_id,
-        'quantity': item.quantity,
-        'name': item.product.name,
-        'price': item.product.price
-    } for item in cart_items]
-    return jsonify(cart_items_data)
+    try:
+        cart_items = CartItem.query.filter_by(user_id=current_user.id).all()
+        cart_items_data = [{
+            'id': item.id,
+            'product_id': item.product_id,
+            'quantity': item.quantity,
+            'name': item.product.name,
+            'price': item.product.price
+        } for item in cart_items]
+        return jsonify(cart_items_data)
+    except SQLAlchemyError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 @app.route('/add_to_cart/<int:product_id>', methods=['POST'])
@@ -167,10 +207,15 @@ def add_to_cart(product_id):
         db.session.add(cart_item)
         db.session.commit()
 
-        return jsonify({'message': 'Product added to cart', 'cartItem': {'product_id': cart_item.product_id, 'quantity': cart_item.quantity}}), 201
-    except Exception as e:
+        return jsonify({'message': 'Product added to cart',
+                        'cartItem': {'product_id': cart_item.product_id,
+                                     'quantity': cart_item.quantity
+                                     }}), 201
+    except SQLAlchemyError as e:
         db.session.rollback()
-        return jsonify({'error': str(e)}), 400
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': 'Unexpected error occurred'}), 500
 
 
 if __name__ == '__main__':
