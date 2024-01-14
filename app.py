@@ -76,7 +76,7 @@ def load_user(user_id):
 @login_manager.unauthorized_handler
 def unauthorized():
     """Zwraca 403 dla niezalogowanych użytkowników próbujących uzyskać dostęp do chronionych zasobów."""
-    return jsonify({'error': 'You must be logged in to access this resource.'}), 403
+    return jsonify({'error': 'You must be logged in to access this resource.'}), 401
 
 
 @app.route('/register', methods=['POST'])
