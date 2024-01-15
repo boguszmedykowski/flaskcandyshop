@@ -9,7 +9,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True, origins=["*"])
+
 app.secret_key = os.environ.get('SECRET_KEY', 'default_secret_key')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
     'DATABASE_URL', 'sqlite:///store.db')

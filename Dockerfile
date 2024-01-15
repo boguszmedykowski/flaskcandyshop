@@ -1,5 +1,5 @@
 FROM python:3.8-slim
-WORKDIR /usr/src/app
+WORKDIR /usr/src/app/
 
 # Copy the entire project
 COPY . .

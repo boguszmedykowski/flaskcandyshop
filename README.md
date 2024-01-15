@@ -11,5 +11,5 @@ python -m pytest
 
 python app.py
 
-docker build -t my-project .
-docker run -p 5000:5000 -p 8080:8080 my-project
+docker build -t flaskcandyshop .
+docker run -d --name flaskcandyshop -p 5000:5000 flaskcandyshop
